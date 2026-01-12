@@ -23,6 +23,8 @@ uniform vec2 u_resolution;
 uniform dvec2 u_center;
 uniform double u_zoom;
 uniform int u_maxIterations;
+uniform int u_palette;
+uniform bool u_contrastEnhance;
 
 void main() {
     vec2 uv = (gl_FragCoord.xy - 0.5 * u_resolution.xy) / min(u_resolution.y, u_resolution.x);
@@ -45,13 +47,41 @@ void main() {
         float smooth_iter = float(iter) - log2(log2(dist)) + 4.0;
         
         // Increase color frequency as we zoom in to maintain contrast/detail
-        float zoom_log = max(0.0, float(-log(float(u_zoom)) / log(10.0)));
-        float color_freq = 0.1 + zoom_log * 0.05;
+        float color_freq = 0.1;
+        if (u_contrastEnhance) {
+            float zoom_log = max(0.0, float(-log(float(u_zoom)) / log(10.0)));
+            color_freq += zoom_log * 0.05;
+        }
         
         float t = smooth_iter * color_freq;
         
-        // Dynamic coloring with expanded range
-        vec3 color = 0.5 + 0.5 * cos(3.0 + t + vec3(0.0, 0.6, 1.0));
+        vec3 color;
+        if (u_palette == 0) {
+            // Original rainbow
+            color = 0.5 + 0.5 * cos(3.0 + t + vec3(0.0, 0.6, 1.0));
+        } else if (u_palette == 1) {
+            // Fiery
+            color = 0.5 + 0.5 * cos(3.0 + t + vec3(0.0, 0.1, 0.2));
+        } else if (u_palette == 2) {
+            // Ocean
+            color = 0.5 + 0.5 * cos(3.0 + t + vec3(0.5, 0.6, 0.0));
+        } else if (u_palette == 3) {
+            // Grayscaleish
+            float gray = 0.5 + 0.5 * cos(3.0 + t);
+            color = vec3(gray);
+        } else if (u_palette == 4) {
+            // Electric
+            color = 0.5 + 0.5 * cos(3.0 + t * 2.0 + vec3(0.0, 0.3, 0.6));
+        } else if (u_palette == 5) {
+            // Neon
+            color = vec3(0.5 + 0.5 * sin(t), 0.5 + 0.5 * sin(t + 2.0), 0.5 + 0.5 * sin(t + 4.0));
+        } else if (u_palette == 6) {
+            // Gold/Bronze
+            color = 0.5 + 0.5 * cos(3.0 + t + vec3(0.1, 0.2, 0.5));
+        } else {
+            color = vec3(1.0);
+        }
+        
         FragColor = vec4(color, 1.0);
     }
 }
@@ -64,6 +94,8 @@ int maxIterations = 256;
 double mouseX = 0, mouseY = 0;
 int width = 800, height = 600;
 int windowWidth = 800, windowHeight = 600;
+int currentPalette = 0;
+bool contrastEnhance = true;
 
 bool dragging = false;
 bool zooming = false;
@@ -135,6 +167,17 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
     }
 }
 
+void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods) {
+    if (action == GLFW_PRESS) {
+        if (key >= GLFW_KEY_1 && key <= GLFW_KEY_7) {
+            currentPalette = key - GLFW_KEY_1;
+        }
+        if (key == GLFW_KEY_Q) {
+            contrastEnhance = !contrastEnhance;
+        }
+    }
+}
+
 void framebuffer_size_callback(GLFWwindow* window, int w, int h) {
     width = w;
     height = h;
@@ -175,6 +218,7 @@ int main() {
     glfwSetScrollCallback(window, scroll_callback);
     glfwSetCursorPosCallback(window, cursor_position_callback);
     glfwSetMouseButtonCallback(window, mouse_button_callback);
+    glfwSetKeyCallback(window, key_callback);
     glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
     
     // Get actual framebuffer and window size
@@ -269,6 +313,8 @@ int main() {
         glUniform2d(glGetUniformLocation(shaderProgram, "u_center"), centerX, centerY);
         glUniform1d(glGetUniformLocation(shaderProgram, "u_zoom"), zoom);
         glUniform1i(glGetUniformLocation(shaderProgram, "u_maxIterations"), maxIterations);
+        glUniform1i(glGetUniformLocation(shaderProgram, "u_palette"), currentPalette);
+        glUniform1i(glGetUniformLocation(shaderProgram, "u_contrastEnhance"), contrastEnhance);
         
         glBindVertexArray(VAO);
         glDrawArrays(GL_TRIANGLES, 0, 6);
