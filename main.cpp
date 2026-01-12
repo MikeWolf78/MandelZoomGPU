@@ -32,7 +32,7 @@ void main() {
     dvec2 z = dvec2(0.0);
     int iter = 0;
 
-    while (dot(z, z) < 4.0 && iter < u_maxIterations) {
+    while (dot(z, z) < 16.0 && iter < u_maxIterations) {
         z = dvec2(z.x * z.x - z.y * z.y + c.x, 2.0 * z.x * z.y + c.y);
         iter++;
     }
@@ -40,9 +40,19 @@ void main() {
     if (iter >= u_maxIterations) {
         FragColor = vec4(0.0, 0.0, 0.0, 1.0);
     } else {
-        float t = float(iter) / float(u_maxIterations);
-        // Simple coloring
-        FragColor = vec4(0.5 + 0.5 * cos(3.0 + t * 10.0 + vec3(0.0, 0.6, 1.0)), 1.0);
+        // Smooth iteration count
+        float dist = length(vec2(z));
+        float smooth_iter = float(iter) - log2(log2(dist)) + 4.0;
+        
+        // Increase color frequency as we zoom in to maintain contrast/detail
+        float zoom_log = max(0.0, float(-log(float(u_zoom)) / log(10.0)));
+        float color_freq = 0.1 + zoom_log * 0.05;
+        
+        float t = smooth_iter * color_freq;
+        
+        // Dynamic coloring with expanded range
+        vec3 color = 0.5 + 0.5 * cos(3.0 + t + vec3(0.0, 0.6, 1.0));
+        FragColor = vec4(color, 1.0);
     }
 }
 )";
@@ -222,9 +232,9 @@ int main() {
     };
 
     int lastRenderWidth = -1, lastRenderHeight = -1;
-    int frms = 100;
+    int frms = 10;
     int framesToReset = frms;
-    
+
     while (!glfwWindowShouldClose(window)) {
         if (framesToReset-- <= 0) {
             zooming = false; // Reset zooming state each frame
