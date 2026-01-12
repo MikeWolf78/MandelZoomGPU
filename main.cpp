@@ -3,7 +3,6 @@
 #include <GLFW/glfw3.h>
 #include <OpenGL/gl3.h>
 #include <iostream>
-#include <vector>
 #include <string>
 #include <algorithm>
 #include <cmath>
@@ -24,33 +23,18 @@ uniform vec2 u_resolution;
 uniform dvec2 u_center;
 uniform double u_zoom;
 uniform int u_maxIterations;
-uniform sampler2D u_complexityMap;
 
 void main() {
     vec2 uv = (gl_FragCoord.xy - 0.5 * u_resolution.xy) / min(u_resolution.y, u_resolution.x);
-    
+
     // We use double precision for the Mandelbrot calculation to allow deeper zooming
     dvec2 c = u_center + dvec2(uv) * u_zoom;
     dvec2 z = dvec2(0.0);
     int iter = 0;
-    
-    // Get predicted max iterations from the complexity map
-    float complexity = texture(u_complexityMap, gl_FragCoord.xy / u_resolution.xy).r;
-    int predictedMaxIter = int(complexity * float(u_maxIterations));
-    // Ensure at least some iterations to avoid black tiles
-    if (predictedMaxIter < 16) predictedMaxIter = 16;
 
-    while (dot(z, z) < 4.0 && iter < predictedMaxIter) {
+    while (dot(z, z) < 4.0 && iter < u_maxIterations) {
         z = dvec2(z.x * z.x - z.y * z.y + c.x, 2.0 * z.x * z.y + c.y);
         iter++;
-    }
-    
-    if (iter >= predictedMaxIter && predictedMaxIter < u_maxIterations) {
-        // If we hit the predicted limit, we used to set it to u_maxIterations (black).
-        // To avoid black artifacts when the prediction is slightly off, we'll
-        // just use the iter value. It might cause slight color banding, but 
-        // it's much better than black spots.
-        // We still keep the 'black' for the real interior.
     }
 
     if (iter >= u_maxIterations) {
@@ -71,81 +55,31 @@ double mouseX = 0, mouseY = 0;
 int width = 800, height = 600;
 int windowWidth = 800, windowHeight = 600;
 
-const int GRID_SIZE = 64;
-float complexityMap[GRID_SIZE * GRID_SIZE];
-GLuint complexityTexture;
-
 bool dragging = false;
+bool zooming = false;
+bool panning = false;
 double lastMouseX = 0, lastMouseY = 0;
 
-int getIterations(double c_re, double c_im, int maxIter) {
-    double z_re = 0, z_im = 0;
-    int iter = 0;
-    while (z_re * z_re + z_im * z_im < 4.0 && iter < maxIter) {
-        double next_re = z_re * z_re - z_im * z_im + c_re;
-        z_im = 2.0 * z_re * z_im + c_im;
-        z_re = next_re;
-        iter++;
-    }
-    return iter;
-}
-
-void updateComplexityMap() {
-    double minRes = std::min(width, height);
-    
-    for (int j = 0; j < GRID_SIZE; ++j) {
-        for (int i = 0; i < GRID_SIZE; ++i) {
-            // 3x3 sampling grid for each tile (9 samples)
-            int maxTileIter = 0;
-            int minTileIter = maxIterations;
-            bool hitMax = false;
-            
-            for (int sy = 0; sy <= 2; ++sy) {
-                for (int sx = 0; sx <= 2; ++sx) {
-                    double x = (i + sx * 0.5) * width / GRID_SIZE;
-                    double y = (j + sy * 0.5) * height / GRID_SIZE;
-                    
-                    double uv_x = (x - 0.5 * width) / minRes;
-                    double uv_y = (y - 0.5 * height) / minRes;
-                    
-                    double c_re = centerX + uv_x * zoom;
-                    double c_im = centerY + uv_y * zoom;
-                    
-                    int iter = getIterations(c_re, c_im, maxIterations);
-                    if (iter >= maxIterations) hitMax = true;
-                    if (iter > maxTileIter) maxTileIter = iter;
-                    if (iter < minTileIter) minTileIter = iter;
-                }
-            }
-            
-            // Prediction:
-            // 1. If any sample hits maxIterations, we must assume the boundary or interior is present.
-            // 2. If there is a significant range in iterations, a boundary is nearby.
-            // 3. We add a safety buffer to the predicted iterations.
-            
-            bool isSimple = !hitMax && (maxTileIter - minTileIter < 2);
-            
-            if (isSimple) {
-                // Add a small buffer (e.g., 20% or at least 32) to handle non-sampled areas
-                int buffer = std::max(32, (int)(maxTileIter * 0.2));
-                int predicted = std::min(maxIterations, maxTileIter + buffer);
-                complexityMap[j * GRID_SIZE + i] = (float)predicted / maxIterations;
-            } else {
-                complexityMap[j * GRID_SIZE + i] = 1.0f;
-            }
-        }
-    }
-    
-    glBindTexture(GL_TEXTURE_2D, complexityTexture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, GRID_SIZE, GRID_SIZE, 0, GL_RED, GL_FLOAT, complexityMap);
-}
+// int getIterations(double c_re, double c_im, int maxIter) {
+//     double z_re = 0, z_im = 0;
+//     int iter = 0;
+//     while (z_re * z_re + z_im * z_im < 4.0 && iter < maxIter) {
+//         double next_re = z_re * z_re - z_im * z_im + c_re;
+//         z_im = 2.0 * z_re * z_im + c_im;
+//         z_re = next_re;
+//         iter++;
+//     }
+//     return iter;
+// }
 
 void scroll_callback(GLFWwindow* window, double xoffset, double yoffset) {
+    zooming = true;
     double zoomFactor = (yoffset > 0) ? 0.9 : 1.1;
     
     // Scale mouse coordinates to framebuffer coordinates
     double fbMouseX = mouseX * (double)width / windowWidth;
-    double fbMouseY = mouseY * (double)height / windowHeight;
+    // Flip Y because GLFW is top-down and OpenGL is bottom-up
+    double fbMouseY = (windowHeight - mouseY) * (double)height / windowHeight;
 
     double minRes = std::min(width, height);
     double uv_x = (fbMouseX - 0.5 * width) / minRes;
@@ -163,12 +97,16 @@ void cursor_position_callback(GLFWwindow* window, double xpos, double ypos) {
         double deltaX = xpos - lastMouseX;
         double deltaY = ypos - lastMouseY;
         
-        double fbDeltaX = deltaX * (double)width / windowWidth;
-        double fbDeltaY = deltaY * (double)height / windowHeight;
-        
-        double minRes = std::min(width, height);
-        centerX -= (fbDeltaX / minRes) * zoom;
-        centerY -= (fbDeltaY / minRes) * zoom;
+        if (deltaX != 0 || deltaY != 0) {
+            panning = true;
+            double fbDeltaX = deltaX * (double)width / windowWidth;
+            double fbDeltaY = deltaY * (double)height / windowHeight;
+            
+            double minRes = std::min(width, height);
+            centerX -= (fbDeltaX / minRes) * zoom;
+            // Flip Y because GLFW is top-down and OpenGL is bottom-up
+            centerY += (fbDeltaY / minRes) * zoom;
+        }
     }
     mouseX = xpos;
     mouseY = ypos;
@@ -264,40 +202,75 @@ int main() {
     
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), (void*)0);
     glEnableVertexAttribArray(0);
+
+    GLuint fbo, fboTexture;
+    glGenFramebuffers(1, &fbo);
+    glGenTextures(1, &fboTexture);
     
-    // Initialize complexity texture
-    glGenTextures(1, &complexityTexture);
-    glBindTexture(GL_TEXTURE_2D, complexityTexture);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    auto setupFBO = [&](int w, int h) {
+        glBindTexture(GL_TEXTURE_2D, fboTexture);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, w, h, 0, GL_RGB, GL_UNSIGNED_BYTE, NULL);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, fboTexture, 0);
+        
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+            std::cerr << "Framebuffer is not complete!" << std::endl;
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    };
+
+    int lastRenderWidth = -1, lastRenderHeight = -1;
+    int frms = 100;
+    int framesToReset = frms;
     
     while (!glfwWindowShouldClose(window)) {
+        if (framesToReset-- <= 0) {
+            zooming = false; // Reset zooming state each frame
+            panning = false; // Reset panning state each frame
+            framesToReset = frms;
+        }
+        glfwPollEvents();
+        bool isMoving = dragging || panning || zooming;
+
         // Optional: dynamically increase iterations as we zoom in
         maxIterations = 256 + (int)(-log10(zoom) * 100);
         if (maxIterations < 256) maxIterations = 256;
         if (maxIterations > 2000) maxIterations = 2000;
 
-        updateComplexityMap();
+        int renderWidth = isMoving ? width / 4 : width;
+        int renderHeight = isMoving ? height / 4 : height;
+        // int renderWidth = width / 4;
+        // int renderHeight = height / 4;
 
+        if (renderWidth != lastRenderWidth || renderHeight != lastRenderHeight) {
+            setupFBO(renderWidth, renderHeight);
+            lastRenderWidth = renderWidth;
+            lastRenderHeight = renderHeight;
+        }
+
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+        glViewport(0, 0, renderWidth, renderHeight);
         glClear(GL_COLOR_BUFFER_BIT);
         
         glUseProgram(shaderProgram);
-        glUniform2f(glGetUniformLocation(shaderProgram, "u_resolution"), (float)width, (float)height);
+        glUniform2f(glGetUniformLocation(shaderProgram, "u_resolution"), (float)renderWidth, (float)renderHeight);
         glUniform2d(glGetUniformLocation(shaderProgram, "u_center"), centerX, centerY);
         glUniform1d(glGetUniformLocation(shaderProgram, "u_zoom"), zoom);
         glUniform1i(glGetUniformLocation(shaderProgram, "u_maxIterations"), maxIterations);
         
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, complexityTexture);
-        glUniform1i(glGetUniformLocation(shaderProgram, "u_complexityMap"), 0);
-
         glBindVertexArray(VAO);
         glDrawArrays(GL_TRIANGLES, 0, 6);
         
+        // Blit to screen
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+        glBlitFramebuffer(0, 0, renderWidth, renderHeight, 
+                          0, 0, width, height, 
+                          GL_COLOR_BUFFER_BIT, GL_LINEAR);
+
         glfwSwapBuffers(window);
-        glfwPollEvents();
         
         if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
             glfwSetWindowShouldClose(window, true);
@@ -305,7 +278,8 @@ int main() {
     
     glDeleteVertexArrays(1, &VAO);
     glDeleteBuffers(1, &VBO);
-    glDeleteTextures(1, &complexityTexture);
+    glDeleteFramebuffers(1, &fbo);
+    glDeleteTextures(1, &fboTexture);
     glDeleteProgram(shaderProgram);
     
     glfwTerminate();
